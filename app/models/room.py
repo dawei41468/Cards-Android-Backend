@@ -86,7 +86,7 @@ class RoomResponse(BaseModel):
     def from_orm(cls, obj: Any) -> "RoomResponse":
         """Custom from_orm to ensure all required fields are populated"""
         return cls(
-            room_id=obj.room_id,
+            room_id=str(obj.room_id),
             name=obj.name,
             host_id=obj.host_id,
             status=obj.status,

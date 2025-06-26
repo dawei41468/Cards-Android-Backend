@@ -55,6 +55,7 @@ async def lifespan(app: FastAPI):
 
     # Register custom game-related event handlers
     sio.on(game_event_handler.EVENT_JOIN_GAME_ROOM, game_event_handler.handle_join_game_room)
+    sio.on(game_event_handler.EVENT_LEAVE_GAME_ROOM, game_event_handler.handle_leave_game_room)
     sio.on(game_event_handler.EVENT_START_GAME, game_event_handler.handle_start_game)
     sio.on(game_event_handler.EVENT_PLAYER_ACTION, game_event_handler.handle_player_action)
 

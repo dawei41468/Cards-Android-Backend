@@ -19,9 +19,12 @@ class GameEventHandler:
     """Handlers for all WebSocket events."""
 
     EVENT_JOIN_GAME_ROOM = 'join_game_room'
+    EVENT_LEAVE_GAME_ROOM = 'leave_game_room'
     EVENT_START_GAME = 'start_game'
     EVENT_PLAYER_ACTION = 'playerAction'
     EVENT_GAME_STATE_UPDATE = 'gameStateUpdate'
+    EVENT_PLAYER_JOINED = 'playerJoined'
+    EVENT_PLAYER_LEFT = 'playerLeft'
 
     def __init__(self, sio: socketio.AsyncServer):
         self.sio = sio
@@ -83,22 +86,15 @@ class GameEventHandler:
                         logger.warning(f"Disconnect: Room {room_id_to_leave} not found or DB error during auto-leave for {guest_id}.")
                         continue
                     
-                    room_response = {
-                        'room_id': room_id_to_leave,
-                        'players': [{
-                            'guest_id': p.guest_id,
-                            'nickname': p.nickname
-                        } for p in updated_room.players]
-                    }
-                    
+                    # After removing the player, fetch the complete room state to ensure a consistent update
+                    # Instead of fetching the full state, just notify that a player left.
                     await self.sio.emit(
-                        self.EVENT_GAME_STATE_UPDATE,
-                        room_response,
+                        self.EVENT_PLAYER_LEFT,
+                        {'guest_id': guest_id},
                         room=room_id_to_leave,
-                        skip_sid=sid
+                        skip_sid=sid  # The disconnected client doesn't need this
                     )
-                    
-                    logger.info(f"Disconnect: Broadcasted room_update for room {room_id_to_leave} after {guest_id} left.")
+                    logger.info(f"Disconnect: Broadcasted '{self.EVENT_PLAYER_LEFT}' for room {room_id_to_leave} after {guest_id} left.")
                     
                     # Update last activity time
                     updated_room.last_activity = datetime.now(timezone.utc)
@@ -162,9 +158,21 @@ class GameEventHandler:
 
             room_data_for_client = RoomResponse.from_orm(final_room_state).model_dump(by_alias=True)
 
-            # Broadcast the updated state to the entire room
-            await self.sio.emit(self.EVENT_GAME_STATE_UPDATE, room_data_for_client, room=room_id)
-            logger.info(f"Sent updated room state to all clients in room {room_id} after player {guest_id} joined. Current players: {len(final_room_state.players)}")
+            # Send the full state ONLY to the player who just joined.
+            await self.sio.emit(
+                self.EVENT_GAME_STATE_UPDATE,
+                room_data_for_client,
+                to=sid
+            )
+
+            # Notify OTHER players in the room that a new player has joined.
+            await self.sio.emit(
+                self.EVENT_PLAYER_JOINED,
+                player_to_add.model_dump(),
+                room=room_id,
+                skip_sid=sid
+            )
+            logger.info(f"Sent state to new player {guest_id} and notified room {room_id}. Current players: {len(final_room_state.players)}")
 
             # Update last activity time
             updated_room.last_activity = datetime.now(timezone.utc)
@@ -173,6 +181,32 @@ class GameEventHandler:
         except Exception as e:
             logger.error(f"Error in handle_join_game_room for sid {sid}, room {room_id}: {e}", exc_info=True)
             await self.sio.emit('error', {'message': f'Error joining room {room_id}.'}, to=sid)
+
+    async def handle_leave_game_room(self, sid: str, data: Dict[str, Any]) -> None:
+        """
+        Handle a client's request to leave a specific game room's Socket.IO room.
+        """
+        session = await self.sio.get_session(sid)
+        guest_id = session.get('guest_id', 'Unknown Guest')
+        room_id = data.get('room_id')
+
+        if not room_id:
+            logger.warning(f"Client {sid} (Guest: {guest_id}) sent '{self.EVENT_LEAVE_GAME_ROOM}' without a room_id.")
+            return
+
+        logger.info(f"Client {sid} (Guest: {guest_id}) attempting to leave Socket.IO room: {room_id}")
+        try:
+            await self.sio.leave_room(sid, room_id)
+            logger.info(f"Client {sid} successfully left Socket.IO room: {room_id}")
+
+            if 'joined_rooms' in session and room_id in session['joined_rooms']:
+                session['joined_rooms'].remove(room_id)
+                await self.sio.save_session(sid, session)
+                logger.info(f"Updated session for {sid} to remove joined_room: {room_id}. Current joined_rooms: {session['joined_rooms']}")
+
+        except Exception as e:
+            logger.error(f"Error in handle_leave_game_room for sid {sid}, room {room_id}: {e}", exc_info=True)
+
 
     async def handle_start_game(self, sid: str, data: Dict) -> None:
         """
@@ -204,6 +238,7 @@ class GameEventHandler:
             room.last_activity = datetime.now(timezone.utc)
             room.status = 'playing'
             room.game_state = CardGameSpecificState(**game_state_dict)
+            room.game_state.status = 'active'
             updated_room = await crud_room.update_room(room_id, room)
             
             room_response = RoomResponse.from_orm(updated_room).model_dump(by_alias=True)
