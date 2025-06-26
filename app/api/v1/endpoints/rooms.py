@@ -6,30 +6,14 @@ from app.models.room import Room, RoomCreateRequest, RoomResponse, PlayerInRoom,
 from app.models.token import TokenData
 from app.crud import crud_room
 from app.core.security import get_current_guest_from_token
-from app.main import sio # Import the Socket.IO server instance
+from app.core.utils import generate_unique_room_code
+from app.websocket.manager import websocket_manager
 
-logger = logging.getLogger(__name__) # Initialize logger at module level
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
-import random
-import string
 
-async def generate_unique_room_code(length: int = 4) -> str:
-    """Generates a unique, short alphanumeric room code."""
-    # Exclude confusing characters like O, 0, I, 1
-    chars = [c for c in string.ascii_lowercase + string.digits if c not in 'o0i1']
-    while True:
-        code = ''.join(random.choices(chars, k=length))
-        # Check if a room with this code already exists using the CRUD function
-        existing_room = await crud_room.get_room_by_id(room_id=code)
-        if not existing_room:
-            logger.info(f"Generated unique room code: {code}")
-            return code
-        else:
-            logger.info(f"Generated room code {code} already exists. Retrying...")
-
-
-@router.post("/", response_model=RoomResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=RoomResponse, status_code=status.HTTP_201_CREATED)
 async def create_room(
     room_in: RoomCreateRequest,
     current_guest: TokenData = Depends(get_current_guest_from_token)
@@ -44,7 +28,7 @@ async def create_room(
     # Create PlayerInRoom instance for the host
     host_player = PlayerInRoom(
         guest_id=current_guest.sub,
-        nickname=current_guest.nickname or "Host",
+        nickname=room_in.nickname or current_guest.nickname or "Host",
         sid=None,
         is_ready=True  # Auto-set host as ready
     )
@@ -52,10 +36,9 @@ async def create_room(
     new_room_id = await generate_unique_room_code()
 
     room_to_create = Room(
-        room_id=new_room_id,
+        _id=new_room_id,
         name=room_in.name,
         host_id=current_guest.sub,
-        max_players=room_in.max_players,
         game_type=room_in.game_type,
         players=[host_player],
         settings=room_in.settings if room_in.settings is not None else RoomSettings()
@@ -73,23 +56,15 @@ async def create_room(
     logger.info(f"Room '{persisted_room.name}' (ID: {persisted_room.room_id}) created by host {current_guest.sub} and persisted to DB.")
 
     # Prepare data for the WebSocket event (should match client's expected RoomResponse structure)
-    response = RoomResponse(
-        room_id=persisted_room.room_id,
-        name=persisted_room.name,
-        host_id=persisted_room.host_id,
-        max_players=persisted_room.max_players,
-        status=persisted_room.status,
-        game_type=persisted_room.game_type,
-        settings=persisted_room.settings,
-        game_state=persisted_room.game_state,
-        created_at=persisted_room.created_at,
-        current_players=len(persisted_room.players),
-        players=persisted_room.players
-    )
+    response = RoomResponse.from_orm(persisted_room)
 
     try:
-        await sio.emit('room_created', response.model_dump(mode='json'))
-        logger.info(f"Emitted 'room_created' event for new room {response.room_id}")
+        try:
+            # Emit a global gameStateUpdate to notify all clients of the new room
+            await websocket_manager.emit('gameStateUpdate', response.model_dump(mode='json'))
+            logger.info(f"Emitted global 'gameStateUpdate' for new room {response.room_id}")
+        except Exception as e:
+            logger.error(f"Failed to emit 'gameStateUpdate' for new room {response.room_id}: {e}", exc_info=True)
     except Exception as e:
         logger.error(f"Failed to emit 'room_created' event for room {response.room_id}: {e}", exc_info=True)
 
@@ -108,21 +83,9 @@ async def get_room(room_id: str, current_guest: TokenData = Depends(get_current_
     if db_room is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
     
-    return RoomResponse(
-        room_id=db_room.room_id,
-        name=db_room.name,
-        host_id=db_room.host_id,
-        max_players=db_room.max_players,
-        status=db_room.status,
-        game_type=db_room.game_type,
-        settings=db_room.settings,
-        game_state=db_room.game_state,
-        created_at=db_room.created_at,
-        current_players=len(db_room.players),
-        players=db_room.players
-    )
+    return RoomResponse.from_orm(db_room)
 
-@router.get("/", response_model=List[RoomResponse]) # Note the path is "/" for the router's root
+@router.get("", response_model=List[RoomResponse])
 async def list_rooms(
     skip: int = 0, 
     limit: int = 10, # Default to 10 rooms, can be overridden by query param
@@ -139,18 +102,7 @@ async def list_rooms(
     
     # Convert List[Room] to List[RoomResponse]
     response_rooms = [
-        RoomResponse(
-            room_id=room.room_id,
-            name=room.name,
-            host_id=room.host_id,
-            max_players=room.max_players,
-            status=room.status,
-            game_type=room.game_type,
-            settings=room.settings,
-            game_state=room.game_state,
-            created_at=room.created_at,
-            current_players=len(room.players)
-        ) for room in db_rooms
+        RoomResponse.from_orm(room) for room in db_rooms
     ]
     return response_rooms
 
@@ -193,23 +145,11 @@ async def join_room_http(
     
     logger.info(f"Player {current_guest.nickname} (ID: {current_guest.sub}) successfully joined room {room_id} via HTTP.")
 
-    response = RoomResponse(
-        room_id=updated_room.room_id,
-        name=updated_room.name,
-        host_id=updated_room.host_id,
-        max_players=updated_room.max_players,
-        status=updated_room.status,
-        game_type=updated_room.game_type,
-        settings=updated_room.settings,
-        game_state=updated_room.game_state,
-        created_at=updated_room.created_at,
-        current_players=len(updated_room.players),
-        players=updated_room.players
-    )
+    response = RoomResponse.from_orm(updated_room)
 
     try:
-        await sio.emit('room_updated', response.model_dump(mode='json'), room=room_id)
-        logger.info(f"Emitted 'room_updated' event for room {room_id} after player join.")
+        await websocket_manager.emit('gameStateUpdate', response.model_dump(mode='json'))
+        logger.info(f"Emitted global 'gameStateUpdate' event to room {room_id} after player join.")
     except Exception as e:
         logger.error(f"Failed to emit 'room_updated' event for room {room_id}: {e}", exc_info=True)
 
@@ -250,7 +190,8 @@ async def toggle_player_ready(
 
         # Prepare response and broadcast update
         response = RoomResponse.from_orm(updated_room)
-        await sio.emit('room_updated', response.model_dump(mode='json'), room=room_id)
+        await websocket_manager.emit('gameStateUpdate', response.model_dump(mode='json'))
+        logger.info(f"Emitted global 'gameStateUpdate' to room {room_id} after player toggled ready status.")
         
         return response
 
@@ -299,11 +240,8 @@ async def start_game(
                 detail="All players must be ready to start the game"
             )
             
-        # Update room status to STARTING
-        updated_room = await crud_room.update_room_status(
-            room_id=room_id,
-            new_status="starting"
-        )
+        # Start the game logic
+        updated_room = await crud_room.start_game(room_id=room_id)
 
         if not updated_room:
             raise HTTPException(
@@ -313,7 +251,7 @@ async def start_game(
 
         # Prepare response and broadcast update
         response = RoomResponse.from_orm(updated_room)
-        await sio.emit('room_updated', response.model_dump(mode='json'), room=room_id)
+        await websocket_manager.emit('gameStateUpdate', response.model_dump(mode='json'), room=room_id)
         
         return response
 
@@ -325,4 +263,35 @@ async def start_game(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while starting the game"
+        )
+
+@router.post("/{room_id}/leave", status_code=status.HTTP_204_NO_CONTENT)
+async def leave_room(
+    room_id: str,
+    current_guest: TokenData = Depends(get_current_guest_from_token)
+):
+    """
+    Allows an authenticated guest to leave a room.
+    """
+    if not current_guest.sub:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Could not validate credentials",
+        )
+
+    try:
+        updated_room = await crud_room.remove_player_from_room(room_id=room_id, guest_id=current_guest.sub)
+
+        if updated_room:
+            response = RoomResponse.from_orm(updated_room)
+            await websocket_manager.emit('gameStateUpdate', response.model_dump(mode='json'))
+            logger.info(f"Emitted global 'gameStateUpdate' to room {room_id} after player left.")
+        
+        return
+
+    except Exception as e:
+        logger.error(f"Unexpected error in leave_room endpoint: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while leaving the room"
         )

@@ -1,15 +1,17 @@
 import logging
-import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from motor.motor_asyncio import AsyncIOMotorDatabase, AsyncIOMotorCollection
 from pymongo.errors import DuplicateKeyError
 
-from app.models.room import Room, PlayerInRoom # Our Pydantic model for a Room
+from app.models.room import Room, PlayerInRoom, Card, CardGameSpecificState
 from app.db.mongodb_utils import get_database # To get the DB instance
+import random
 
 logger = logging.getLogger(__name__)
 
 ROOM_COLLECTION = "rooms" # Name of the MongoDB collection for rooms
+INITIAL_HAND_SIZE = 7 # Number of cards to deal to each player
 
 async def get_room_collection() -> AsyncIOMotorCollection:
     """Helper to get the rooms collection."""
@@ -107,7 +109,7 @@ async def add_player_to_room(room_id: str, player: PlayerInRoom) -> Optional[Roo
     """
     try:
         collection = await get_room_collection()
-        now = datetime.datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # First, try to update SID if player already exists
         # This also implicitly checks if the room exists.
@@ -144,8 +146,11 @@ async def add_player_to_room(room_id: str, player: PlayerInRoom) -> Optional[Roo
         # Check if room is full before attempting $addToSet
         # Note: 'players' in room_to_join might be slightly stale if another player joined concurrently
         # after the SID update attempt but before this find_one. $addToSet is atomic for the add itself.
-        if len(room_to_join.get("players", [])) >= room_to_join.get("max_players", 0):
-            logger.warning(f"add_player_to_room: Room {room_id} is full (max: {room_to_join.get('max_players')}). Cannot add player {player.guest_id}.")
+        room_settings = room_to_join.get("settings", {})
+        max_players = room_settings.get("max_players", 0)
+
+        if len(room_to_join.get("players", [])) >= max_players:
+            logger.warning(f"add_player_to_room: Room {room_id} is full (max: {max_players}). Cannot add player {player.guest_id}.")
             return None
 
         # Add player if not full and player not already present (though $addToSet handles this, it's good for clarity)
@@ -198,49 +203,66 @@ async def remove_player_from_room(room_id: str, guest_id: str) -> Optional[Room]
             logger.warning(f"remove_player_from_room: Room {room_id} not found.")
             return None
 
-        current_room = Room(**room_doc)
-        original_player_count = len(current_room.players)
+        # Remove player from players list
+        room = Room(**room_doc)
+        room.players = [p for p in room.players if p.guest_id != guest_id]
 
-        current_room.players = [p for p in current_room.players if p.guest_id != guest_id]
+        # If host left, assign new host if players remain
+        if room.host_id == guest_id and room.players:
+            room.host_id = room.players[0].guest_id
 
-        if len(current_room.players) == original_player_count:
-            logger.info(f"remove_player_from_room: Player {guest_id} not found in room {room_id}. No changes made.")
-            # Optionally, still update updated_at or return current_room if no actual change is an issue
-            return current_room # Or None if player not found should be an error for the caller
-
-        current_room.updated_at = datetime.datetime.utcnow()
-
-        update_data = {
-            "$set": {
-                "players": [p.model_dump() for p in current_room.players],
-                "updated_at": current_room.updated_at
-            }
-        }
-
-        # Special case: if host leaves, do we need to assign a new host or close room?
-        # For now, just remove. Host logic can be added later.
-        # if current_room.host_id == guest_id:
-        #     logger.info(f"Host {guest_id} is leaving room {room_id}.")
-        #     # Add logic here: e.g., if players left, assign new host or mark room as abandoned/closable
-
-        result = await collection.update_one({"_id": room_id}, update_data)
+        # Update the room in the database
+        now = datetime.now(timezone.utc)
+        result = await collection.update_one(
+            {"_id": room_id},
+            {"$set": {
+                "players": [p.model_dump() for p in room.players],
+                "host_id": room.host_id,
+                "updated_at": now
+            }}
+        )
 
         if result.modified_count == 1:
+            updated_room = await get_room_by_id(room_id)
             logger.info(f"Player {guest_id} removed from room {room_id}.")
-            return current_room
+            return updated_room
         else:
-            # This case might happen if player was already removed by another process, or never existed
-            # but we already checked for player existence by comparing player counts.
-            logger.warning(f"Player {guest_id} removal from room {room_id} did not modify the document, or room not found for update.")
-            # Return current_room state if no modification, as it reflects the DB if player wasn't there
-            return current_room 
+            logger.warning(f"Failed to remove player {guest_id} from room {room_id}.")
+            return None
 
-    except RuntimeError as e:
-        logger.error(f"Error removing player from room (DB not init): {e}")
-        return None
     except Exception as e:
         logger.error(f"An unexpected error occurred while removing player {guest_id} from room {room_id}: {e}")
         return None
+
+async def get_rooms_with_no_players() -> List[Room]:
+    """
+    Fetches all rooms that have no players.
+    """
+    try:
+        collection = await get_room_collection()
+        cursor = collection.find({"players": {"$size": 0}})
+        rooms_list = []
+        async for room_doc in cursor:
+            rooms_list.append(Room(**room_doc))
+        return rooms_list
+    except Exception as e:
+        logger.error(f"An error occurred while getting empty rooms: {e}")
+        return []
+
+async def get_rooms_inactive_since(threshold: datetime) -> List[Room]:
+    """
+    Fetches all rooms that have been inactive since the given threshold.
+    """
+    try:
+        collection = await get_room_collection()
+        cursor = collection.find({"last_activity": {"$lt": threshold}})
+        rooms_list = []
+        async for room_doc in cursor:
+            rooms_list.append(Room(**room_doc))
+        return rooms_list
+    except Exception as e:
+        logger.error(f"An error occurred while getting inactive rooms: {e}")
+        return []
 
 async def update_room_status(room_id: str, new_status: str) -> Optional[Room]:
     """
@@ -252,7 +274,7 @@ async def update_room_status(room_id: str, new_status: str) -> Optional[Room]:
         update_data = {
             "$set": {
                 "status": new_status,
-                "updated_at": datetime.datetime.utcnow()
+                "updated_at": datetime.now(timezone.utc)
             }
         }
         
@@ -274,7 +296,7 @@ async def update_game_state(room_id: str, game_state: Dict[str, Any]) -> Optiona
     """
     try:
         collection = await get_room_collection()
-        current_time = datetime.datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         
         # Prepare the update with current timestamp
         update_data = {
@@ -315,7 +337,7 @@ async def update_room(room_id: str, room: Room) -> Optional[Room]:
     """
     try:
         collection = await get_room_collection()
-        current_time = datetime.datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         
         # Convert room to dict and update timestamps
         room_dict = room.model_dump(by_alias=True, exclude_unset=True)
@@ -374,7 +396,7 @@ async def toggle_player_ready(room_id: str, player_id: str) -> Optional[Room]:
             
         # Update the room with modified players
         room.players = updated_players
-        room.updated_at = datetime.datetime.utcnow()
+        room.updated_at = datetime.now(timezone.utc)
         
         # Save to database
         try:
@@ -402,3 +424,65 @@ async def toggle_player_ready(room_id: str, player_id: str) -> Optional[Room]:
     except Exception as e:
         logger.error(f"Unexpected error in toggle_player_ready: {e}", exc_info=True)
         raise
+
+def _create_deck(settings) -> List[Card]:
+    """Creates a standard deck of cards based on game settings."""
+    suits = ["H", "D", "C", "S"]
+    ranks = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
+    deck = [Card(id=f"{suit}{rank}-{i}", suit=suit, rank=rank) for i in range(settings.number_of_decks) for suit in suits for rank in ranks]
+    if settings.include_jokers:
+        deck.extend([Card(id=f"Joker-{i}", suit="Joker", rank="Joker") for i in range(2 * settings.number_of_decks)])
+    random.shuffle(deck)
+    return deck
+
+
+async def start_game(room_id: str) -> Optional[Room]:
+    """Initializes the game state, deals cards, and updates the room."""
+    try:
+        collection = await get_room_collection()
+        room = await get_room_by_id(room_id)
+        if not room:
+            return None
+
+        deck = _create_deck(room.settings)
+        
+        player_hands = {p.guest_id: [deck.pop() for _ in range(INITIAL_HAND_SIZE)] for p in room.players}
+
+        room.game_state = CardGameSpecificState(
+            deck=deck,
+            players=room.players,
+            player_hands=player_hands,
+            current_turn_guest_id=room.players[0].guest_id,
+            turn_order=[p.guest_id for p in room.players]
+        )
+        room.status = "active"
+        
+        await collection.update_one(
+            {"_id": room_id},
+            {"$set": room.model_dump(by_alias=True)}
+        )
+        
+        return await get_room_by_id(room_id)
+    except Exception as e:
+        logger.error(f"Error starting game for room {room_id}: {e}")
+        return None
+
+async def delete_room(room_id: str) -> bool:
+    """
+    Deletes a room from the database by its room_id.
+    Returns True if deletion was successful, False otherwise.
+    """
+    try:
+        collection = await get_room_collection()
+        result = await collection.delete_one({"_id": room_id})
+        
+        if result.deleted_count == 1:
+            logger.info(f"Room {room_id} deleted successfully.")
+            return True
+        else:
+            logger.warning(f"Room {room_id} not found for deletion.")
+            return False
+            
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while deleting room {room_id}: {e}")
+        return False

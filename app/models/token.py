@@ -13,7 +13,8 @@ class Token(BaseModel):
     Response model for a successfully generated token.
     """
     access_token: str
-    token_type: str # Will typically be "bearer"
+    token_type: str
+    user_id: str
 
 class TokenData(BaseModel):
     """

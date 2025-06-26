@@ -7,9 +7,9 @@ from app.core.config import settings # For token_type, if defined there, or just
 
 router = APIRouter()
 
-@router.post("/login", response_model=Token)
-async def login_guest(
-    guest_request: GuestLoginRequest
+@router.post("/guest", response_model=Token, summary="Guest Login")
+async def guest_login(
+    guest_request: GuestLoginRequest,
 ) -> Token:
     """
     Handles guest login.
@@ -26,4 +26,4 @@ async def login_guest(
     
     access_token = create_access_token(data=token_data)
     
-    return Token(access_token=access_token, token_type="bearer")
+    return Token(access_token=access_token, token_type="bearer", user_id=guest_id)

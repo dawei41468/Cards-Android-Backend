@@ -4,17 +4,37 @@ Main FastAPI application entry point.
 import logging
 from contextlib import asynccontextmanager
 import socketio
+import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
+import json
 from app.db.mongodb_utils import connect_to_mongo, close_mongo_connection
-from app.websocket.handlers.connection_handlers import ConnectionHandlers
-from app.websocket.handlers import game_handlers 
-from app.websocket import setup_socketio
+from app.background.cleanup import clean_inactive_rooms
+from app.websocket.game_event_handler import GameEventHandler
+from app.websocket.manager import websocket_manager
+from app.core.json_encoder import CustomJSONEncoder
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+class CustomJsonModule:
+    def dumps(self, *args, **kwargs):
+        kwargs['cls'] = CustomJSONEncoder
+        return json.dumps(*args, **kwargs)
+
+    def loads(self, *args, **kwargs):
+        return json.loads(*args, **kwargs)
+
+custom_json = CustomJsonModule()
+
+# --- Background Task ---
+async def run_cleanup_task():
+    """Run the cleanup task periodically."""
+    while True:
+        await asyncio.sleep(60 * 15)  # Run every 15 minutes
+        await clean_inactive_rooms()
 
 # --- Application Lifespan Management ---
 @asynccontextmanager
@@ -23,20 +43,29 @@ async def lifespan(app: FastAPI):
     logger.info("Application startup: Connecting to MongoDB...")
     await connect_to_mongo()
     
+    # Set up the WebSocket manager with the SIO server instance
+    websocket_manager.set_sio(sio)
+    
     # Initialize ConnectionHandlers with the SIO server instance
-    connection_handlers = ConnectionHandlers(sio)
+    game_event_handler = GameEventHandler(sio)
 
     # Register connection and disconnection event handlers
-    sio.on('connect', connection_handlers.handle_connect)
-    sio.on('disconnect', connection_handlers.handle_disconnect)
+    sio.on('connect', game_event_handler.handle_connect)
+    sio.on('disconnect', game_event_handler.handle_disconnect)
 
     # Register custom game-related event handlers
-    sio.on(ConnectionHandlers.EVENT_JOIN_GAME_ROOM, connection_handlers.handle_join_game_room)
+    sio.on(game_event_handler.EVENT_JOIN_GAME_ROOM, game_event_handler.handle_join_game_room)
+    sio.on(game_event_handler.EVENT_START_GAME, game_event_handler.handle_start_game)
+    sio.on(game_event_handler.EVENT_PLAYER_ACTION, game_event_handler.handle_player_action)
+
+    # Start the background cleanup task
+    cleanup_task = asyncio.create_task(run_cleanup_task())
 
     try:
         yield
     finally:
         logger.info("Application shutdown: Closing MongoDB connection...")
+        cleanup_task.cancel()
         await close_mongo_connection()
 
 # --- Socket.IO Server Setup ---
@@ -44,11 +73,11 @@ sio = socketio.AsyncServer(
     async_mode='asgi',
     cors_allowed_origins="*",
     logger=True,
-    engineio_logger=True
+    engineio_logger=True,
+    json=custom_json
 )
 
 # Set up Socket.IO event handlers
-setup_socketio(sio)
 
 # --- FastAPI Application Setup ---
 app = FastAPI(
@@ -74,17 +103,16 @@ app.add_middleware(
 app.mount("/socket.io", socketio.ASGIApp(sio, socketio_path=""))
 
 # --- API Routers ---
-from app.api.v1.endpoints import auth as auth_router
-from app.api.v1.endpoints import rooms as rooms_router
+from app.api.v1.endpoints import auth, rooms
 
 app.include_router(
-    auth_router.router,
-    prefix=f"{settings.API_V1_STR}/auth/guest",
-    tags=["guest-auth"]
+    auth.router,
+    prefix=f"{settings.API_V1_STR}/auth",
+    tags=["Authentication"]
 )
 
 app.include_router(
-    rooms_router.router,
+    rooms.router,
     prefix=f"{settings.API_V1_STR}/rooms",
     tags=["rooms"]
 )

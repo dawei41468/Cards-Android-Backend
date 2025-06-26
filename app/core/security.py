@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-
+import logging
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -31,14 +31,21 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         The encoded JWT string.
     """
     to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    # If an explicit expires_delta is not provided, default to 1 day.
+    # Revert to a standard 1-day expiration now that the client can handle 401s.
+    effective_expires_delta = expires_delta or timedelta(days=1)
+    logging.info(f"V3: Creating token with lifetime: {effective_expires_delta}") # V3 Logging
     
-    to_encode.update({"exp": expire})
-    # Add 'iat' (issued at) claim
-    to_encode.update({"iat": datetime.now(timezone.utc)})
+    # Calculate expiration time based on the current server time.
+    expire = datetime.now(timezone.utc) + effective_expires_delta
+    
+    # Set the 'exp' (expiration) claim as an integer timestamp.
+    to_encode["exp"] = int(expire.timestamp())
+    
+    # The 'iat' claim is optional and is causing issues due to server clock skew.
+    # By removing it, we simplify the token and rely only on the 'exp' claim for validation.
+    if "iat" in to_encode:
+        del to_encode["iat"]
     
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
@@ -58,16 +65,36 @@ async def decode_access_token(token: str) -> TokenData:
         TokenData: The decoded token data (sub, nickname).
     """
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        # --- Start Enhanced Logging ---
+        current_time_utc = datetime.now(timezone.utc)
+        
+        try:
+            # Manually decode payload for logging without validation
+            import base64
+            import json
+            payload_unverified = json.loads(base64.urlsafe_b64decode(token.split('.')[1] + '==').decode())
+            exp_time = datetime.fromtimestamp(payload_unverified.get('exp', 0), tz=timezone.utc)
+            iat_time = datetime.fromtimestamp(payload_unverified.get('iat', 0), tz=timezone.utc)
+        except Exception as e:
+            logging.error(f"Could not manually decode payload for logging: {e}")
+        # --- End Enhanced Logging ---
+
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+            options={"leeway": 60}
+        )
         guest_id: Optional[str] = payload.get("sub")
         nickname: Optional[str] = payload.get("nickname")
 
+        logging.info(f"Extracted guest_id: {guest_id}")
         if guest_id is None:
             raise CREDENTIALS_EXCEPTION
 
         return TokenData(sub=guest_id, nickname=nickname)
     except JWTError as e:
-        # logger.error(f"JWT decoding error: {e}") 
+        logging.error(f"JWT decoding error: {e}")
         raise CREDENTIALS_EXCEPTION
 
 
