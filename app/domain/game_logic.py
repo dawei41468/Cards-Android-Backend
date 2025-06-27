@@ -1,78 +1,92 @@
 """
-Game Logic - Core game logic implementation
+Core game logic for the card game.
 """
-from typing import List, Dict, Any
-import random
-from datetime import datetime
+from app.models.room import Room, Card
 
-from app.models.room import Card
-
-
-def generate_deck(num_decks: int = 1, include_jokers: bool = False) -> List[Card]:
-    """Generate one or more standard decks of cards"""
-    deck = []
-    suits = ['H', 'D', 'C', 'S']
-    ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
-    
-    for _ in range(num_decks):
-        for suit in suits:
-            for rank in ranks:
-                deck.append(Card(id=f'{suit}{rank}', suit=suit, rank=rank))
-        
-        if include_jokers:
-            deck.extend([
-                Card(id='JOKER1', suit='JOKER', rank='JOKER'),
-                Card(id='JOKER2', suit='JOKER', rank='JOKER')
-            ])
-    
-    return deck
-
-
-def shuffle_deck(deck: List[Card]) -> List[Card]:
-    """Shuffle a deck of cards"""
-    random.shuffle(deck)
-    return deck
-
-
-def deal_cards(deck: List[Card], players: List[str], cards_per_player: int = 7) -> tuple:
+def play_cards(room: Room, player_index: int, cards: list[Card]):
     """
-    Deal cards to players from the deck
-    Returns:
-        (updated_deck, player_hands)
+    Move cards from a player's hand to the table.
     """
-    player_hands = {player_id: [] for player_id in players}
-    
-    for _ in range(cards_per_player):
-        for player_id in players:
-            if deck:
-                player_hands[player_id].append(deck.pop())
-    
-    return deck, player_hands
+    if not room.game_state:
+        return
+    player = room.players[player_index]
+    for card in cards:
+        if card in player.hand:
+            player.hand.remove(card)
+    room.game_state.table.append(cards)
+
+def discard_cards(room: Room, player_index: int, cards: list[Card]):
+    """
+    Move cards from a player's hand to the discard pile.
+    """
+    if not room.game_state:
+        return
+    player = room.players[player_index]
+    for card in cards:
+        if card in player.hand:
+            player.hand.remove(card)
+            room.game_state.discard_pile.append(card)
+
+def recall_cards(room: Room, player_index: int):
+    """
+    Recall all cards from the table to a player's hand.
+    """
+    if not room.game_state:
+        return
+    player = room.players[player_index]
+    for pile in room.game_state.table:
+        for card in pile:
+            player.hand.append(card)
+    room.game_state.table.clear()
+
+def move_card_to_player(room: Room, source_player_index: int, card: Card, target_player_id: str):
+    """
+    Move a card from one player's hand to another's.
+    """
+    source_player = room.players[source_player_index]
+    target_player = next((p for p in room.players if p.guest_id == target_player_id), None)
+
+    if target_player and card in source_player.hand:
+        source_player.hand.remove(card)
+        target_player.hand.append(card)
+
+def shuffle_deck(room: Room):
+    """
+    Shuffle the deck, incorporating cards from the table.
+    """
+    if not room.game_state:
+        return
+    import random
+    cards_to_shuffle = [card for pile in room.game_state.table for card in pile]
+    room.game_state.deck.extend(cards_to_shuffle)
+    room.game_state.table.clear()
+    random.shuffle(room.game_state.deck)
 
 
-def initialize_game_state(room_id: str, settings: Dict[str, Any], players: List[Dict[str, Any]]) -> Dict[str, Any]:
+def deal_cards(room: Room, count: int):
     """
-    Initialize a new game state with shuffled deck and dealt cards
-    Args:
-        room_id: Room identifier
-        settings: Game settings (num_decks, include_jokers, etc)
-        players: List of player dicts with id and name
+    Deal a specified number of cards to each player.
     """
-    deck = generate_deck(
-        num_decks=settings.get('number_of_decks', 1),
-        include_jokers=settings.get('include_jokers', False)
-    )
-    shuffled_deck = shuffle_deck(deck)
-    
-    player_ids = [p['guest_id'] for p in players]
-    remaining_deck, player_hands = deal_cards(shuffled_deck, player_ids)
-    
+    if not room.game_state:
+        return
+    for _ in range(count):
+        for player in room.players:
+            if room.game_state.deck:
+                card = room.game_state.deck.pop()
+                player.hand.append(card)
+
+
+def initialize_game_state(room_id: str, settings: dict, players: list[dict]) -> dict:
+    """
+    Initialize a new game state.
+    """
+    # Simplified initialization logic
     return {
-        'status': 'active',
-        'current_turn_guest_id': random.choice(player_ids),
-        'turn_order': player_ids,
-        'deck': remaining_deck,
-        'player_hands': player_hands,
-        'discard_pile': [],
-        'last_action_description': 'Game started.'
+        "room_id": room_id,
+        "status": "active",
+        "players": players,
+        "deck": [],
+        "table": [],
+        "discard_pile": [],
+        "current_turn": 0,
     }

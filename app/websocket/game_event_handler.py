@@ -13,6 +13,14 @@ from app.crud import crud_room
 from app.domain.game_logic import initialize_game_state
 from app.models.room import Card, CardGameSpecificState, Room, RoomResponse, PlayerInRoom
 
+from app.websocket.actions.player_actions import (
+    DealCardsAction,
+    DiscardCardsAction,
+    MoveCardToPlayerAction,
+    PlayCardsAction,
+    RecallCardsAction,
+    ShuffleDeckAction,
+)
 logger = logging.getLogger(__name__)
 
 class GameEventHandler:
@@ -28,6 +36,7 @@ class GameEventHandler:
 
     def __init__(self, sio: socketio.AsyncServer):
         self.sio = sio
+        self.sio.on(self.EVENT_PLAYER_ACTION, self.handle_player_action)
 
     async def handle_connect(self, sid: str, environ: Dict, auth: Any) -> bool:
         """Handle new Socket.IO connections."""
@@ -226,7 +235,7 @@ class GameEventHandler:
             room = await self._get_room(room_id)
             self._validate_host(room, guest_id)
             
-            if room.status == 'playing':
+            if room.status == 'active':
                 raise ValueError("Game already started")
                 
             if len(room.players) < 2:
@@ -236,9 +245,15 @@ class GameEventHandler:
             
             # Update last activity time before saving
             room.last_activity = datetime.now(timezone.utc)
-            room.status = 'playing'
+            room.status = 'active'
             room.game_state = CardGameSpecificState(**game_state_dict)
             room.game_state.status = 'active'
+
+            # Set initial turn
+            if room.game_state.turn_order:
+                room.game_state.current_turn_guest_id = room.game_state.turn_order[0]
+                room.game_state.current_player_index = 0
+            
             updated_room = await crud_room.update_room(room_id, room)
             
             room_response = RoomResponse.from_orm(updated_room).model_dump(by_alias=True)
@@ -273,15 +288,40 @@ class GameEventHandler:
             room = await self._get_room(room_id)
             self._validate_player_in_room(room, guest_id)
             
-            if room.status != 'playing':
+            if room.status != 'active' or not room.game_state:
                 raise ValueError("Game not in progress")
                 
-            if action_type == 'play_card':
-                await self._handle_play_card(room, guest_id, action_data)
-            elif action_type == 'draw_card':
-                await self._handle_draw_card(room, guest_id)
-            else:
+            action_classes = {
+                'PLAY_CARDS': PlayCardsAction,
+                'DISCARD_CARDS': DiscardCardsAction,
+                'RECALL_CARDS': RecallCardsAction,
+                'MOVE_CARD_TO_PLAYER': MoveCardToPlayerAction,
+                'SHUFFLE_DECK': ShuffleDeckAction,
+                'DEAL_CARDS': DealCardsAction,
+            }
+            
+            action_class = action_classes.get(action_type)
+            if not action_class:
                 raise ValueError(f"Unknown action type: {action_type}")
+
+            action = action_class(**action_data)
+            
+            player_index = -1
+            for i, p in enumerate(room.players):
+                if p.guest_id == guest_id:
+                    player_index = i
+                    break
+            
+            action.validate_action(player_index, room.game_state, room)
+            action.apply(room.game_state, player_index, room)
+
+            # --- Advance Turn ---
+            if room.game_state.turn_order:
+                current_index = room.game_state.current_player_index or 0
+                next_index = (current_index + 1) % len(room.game_state.turn_order)
+                room.game_state.current_player_index = next_index
+                room.game_state.current_turn_guest_id = room.game_state.turn_order[next_index]
+                room.game_state.turn_number += 1
             
             # Update last activity time before saving
             room.last_activity = datetime.now(timezone.utc)
@@ -298,89 +338,22 @@ class GameEventHandler:
                 'error': error_msg
             }, to=sid)
 
-    async def _handle_play_card(self, room: Room, guest_id: str, action_data: Dict) -> None:
-        """
-        Handle play card action.
-        """
-        if not room.game_state:
-            raise ValueError("Game state not initialized")
-        game_state = room.game_state
-
-        player_idx, player = next(
-            (i, p) for i, p in enumerate(game_state.players)
-            if p.guest_id == guest_id
-        )
-        
-        card_data = action_data.get('card')
-        if not card_data:
-            raise ValueError("No card provided")
-            
-        card = next(
-            (c for c in player.hand 
-             if c.suit == card_data.get('suit') 
-             and c.rank == card_data.get('rank')),
-            None
-        )
-        
-        if not card:
-            raise ValueError("Card not found in player's hand")
-            
-        last_card = game_state.discard_pile[-1] if game_state.discard_pile else None
-        if last_card and not self._is_valid_play(card, last_card):
-            raise ValueError("Invalid card play")
-        
-        player.hand.remove(card)
-        game_state.discard_pile.append(card)
-        
-        if not player.hand:
-            game_state.winner_guest_id = guest_id
-            room.status = 'finished'
-
-    async def _handle_draw_card(self, room: Room, guest_id: str) -> None:
-        """
-        Handle draw card action.
-        """
-        if not room.game_state:
-            raise ValueError("Game state not initialized")
-        game_state = room.game_state
-
-        player = next(p for p in game_state.players if p.guest_id == guest_id)
-        
-        if not game_state.deck:
-            raise ValueError("No cards left to draw")
-            
-        drawn_card = game_state.deck.pop()
-        player.hand.append(drawn_card)
-
-    def _is_valid_play(self, card: Card, last_card: Card) -> bool:
-        """
-        Check if a card can be played on top of the last played card.
-        """
-        if card.suit == last_card.suit or card.rank == last_card.rank:
-            return True
-            
-        return False
-
     async def _get_validated_session(self, sid: str) -> Dict:
-        """Get and validate the session for a socket ID."""
         session = await self.sio.get_session(sid)
         if not session or 'guest_id' not in session:
             raise ValueError("Invalid session")
         return session
 
     async def _get_room(self, room_id: str) -> Room:
-        """Get a room by its ID."""
         room = await crud_room.get_room_by_id(room_id)
         if not room:
             raise ValueError("Room not found")
         return room
 
     def _validate_host(self, room: Room, guest_id: str) -> None:
-        """Validate that a player is the host of a room."""
         if room.host_id != guest_id:
             raise ValueError("Only the host can perform this action")
 
     def _validate_player_in_room(self, room: Room, guest_id: str) -> None:
-        """Validate that a player is in a room."""
-        if guest_id not in [p.guest_id for p in room.players]:
+        if not any(p.guest_id == guest_id for p in room.players):
             raise ValueError("Player not in room")

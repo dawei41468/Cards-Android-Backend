@@ -7,6 +7,7 @@ class Card(BaseModel):
     id: str = Field(..., description="Unique ID for the card, e.g., 'H7', 'SK' (SuitRank)")
     suit: str = Field(..., description="Suit of the card: H, D, C, S")
     rank: str = Field(..., description="Rank of the card: 2-10, J, Q, K, A")
+    deckId: int = Field(..., description="The deck ID this card belongs to")
 
 class PlayerInRoom(BaseModel):
     guest_id: str = Field(...)
@@ -26,12 +27,12 @@ class RoomSettings(BaseModel):
 class CardGameSpecificState(BaseModel):
     status: str = Field(default="pending_start", description="Game status: pending_start, active, finished")
     current_turn_guest_id: Optional[str] = Field(default=None, description="Guest ID of the player whose turn it is")
+    current_player_index: Optional[int] = Field(default=None, description="Index of the current player in the turn_order list")
     turn_number: int = Field(default=0, description="Current turn number")
     turn_order: List[str] = Field(default_factory=list, description="List of guest_ids in order of play")
     deck: List[Card] = Field(default_factory=list, description="Cards remaining in the deck")
-    players: List[PlayerInRoom] = Field(default_factory=list, description="List of players in the game")
-    player_hands: Dict[str, List[Card]] = Field(default_factory=dict, description="Mapping of guest_id to their list of cards")
     discard_pile: List[Card] = Field(default_factory=list, description="Cards that have been played")
+    table: List[List[Card]] = Field(default_factory=list)
     last_action_description: Optional[str] = Field(default=None, description="Description of the last action taken")
     winner_guest_id: Optional[str] = Field(default=None, description="Guest ID of the winner, if any")
 

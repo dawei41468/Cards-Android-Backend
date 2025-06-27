@@ -295,3 +295,20 @@ async def leave_room(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while leaving the room"
         )
+
+@router.delete("/clear-all-rooms", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_all_rooms():
+    """
+    Deletes all rooms from the database. For debugging purposes.
+    """
+    try:
+        collection = await crud_room.get_room_collection()
+        result = await collection.delete_many({})
+        logger.info(f"Deleted {result.deleted_count} rooms.")
+        return
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while clearing rooms: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while clearing rooms."
+        )

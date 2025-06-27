@@ -429,9 +429,9 @@ def _create_deck(settings) -> List[Card]:
     """Creates a standard deck of cards based on game settings."""
     suits = ["H", "D", "C", "S"]
     ranks = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
-    deck = [Card(id=f"{suit}{rank}-{i}", suit=suit, rank=rank) for i in range(settings.number_of_decks) for suit in suits for rank in ranks]
+    deck = [Card(id=f"{suit}{rank}-{i}", suit=suit, rank=rank, deckId=i) for i in range(settings.number_of_decks) for suit in suits for rank in ranks]
     if settings.include_jokers:
-        deck.extend([Card(id=f"Joker-{i}", suit="Joker", rank="Joker") for i in range(2 * settings.number_of_decks)])
+        deck.extend([Card(id=f"Joker-{i}", suit="Joker", rank="Joker", deckId=i) for i in range(2 * settings.number_of_decks)])
     random.shuffle(deck)
     return deck
 
@@ -448,12 +448,17 @@ async def start_game(room_id: str) -> Optional[Room]:
         
         player_hands = {p.guest_id: [deck.pop() for _ in range(INITIAL_HAND_SIZE)] for p in room.players}
 
+        for player in room.players:
+            player.hand = player_hands.get(player.guest_id, [])
+
         room.game_state = CardGameSpecificState(
+            status="active",
             deck=deck,
             players=room.players,
             player_hands=player_hands,
             current_turn_guest_id=room.players[0].guest_id,
-            turn_order=[p.guest_id for p in room.players]
+            turn_order=[p.guest_id for p in room.players],
+            current_player_index=0
         )
         room.status = "active"
         
