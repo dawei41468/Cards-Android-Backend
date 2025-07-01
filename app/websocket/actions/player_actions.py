@@ -14,8 +14,6 @@ class PlayCardsAction(PlayerAction):
         if not game_state:
             raise ValueError("Game not started")
         player = room.players[player_index]
-        if game_state.current_turn_guest_id != player.guest_id:
-            raise ValueError("Not your turn")
         if not all(card in player.hand for card in self.cards):
             raise ValueError("Player does not have all of these cards")
 
@@ -71,3 +69,30 @@ class DealCardsAction(HostAction):
 
     def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
         game_logic.deal_cards(room, self.count)
+
+class DrawCardAction(PlayerAction):
+    def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
+        if not game_state:
+            raise ValueError("Game not started")
+        player = room.players[player_index]
+
+    def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
+        game_logic.draw_card(room, player_index)
+
+
+class DrawToDiscardAction(PlayerAction):
+    def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
+        if not game_state or not game_state.deck:
+            raise ValueError("No cards in deck to draw")
+
+    def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
+        game_logic.draw_to_discard(room)
+
+
+class DrawFromDiscardAction(PlayerAction):
+    def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
+        if not game_state or not game_state.discard_pile:
+            raise ValueError("No cards in discard pile to draw")
+
+    def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
+        game_logic.draw_from_discard(room, player_index)

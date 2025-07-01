@@ -90,3 +90,32 @@ def initialize_game_state(room_id: str, settings: dict, players: list[dict]) -> 
         "discard_pile": [],
         "current_turn": 0,
     }
+
+def draw_card(room: Room, player_index: int):
+    """
+    Draw one card from the deck to a player's hand.
+    """
+    if not room.game_state or not room.game_state.deck:
+        return
+    player = room.players[player_index]
+    card = room.game_state.deck.pop()
+    player.hand.append(card)
+
+def draw_to_discard(room: Room):
+    """
+    Draw one card from the deck to the discard pile.
+    """
+    if not room.game_state or not room.game_state.deck:
+        return
+    card = room.game_state.deck.pop()
+    room.game_state.discard_pile.append(card)
+
+def draw_from_discard(room: Room, player_index: int):
+    """
+    Draw one card from the discard pile to a player's hand.
+    """
+    if not room.game_state or not room.game_state.discard_pile:
+        return
+    player = room.players[player_index]
+    card = room.game_state.discard_pile.pop()
+    player.hand.append(card)

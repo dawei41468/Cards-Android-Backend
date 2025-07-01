@@ -16,10 +16,13 @@ from app.models.room import Card, CardGameSpecificState, Room, RoomResponse, Pla
 from app.websocket.actions.player_actions import (
     DealCardsAction,
     DiscardCardsAction,
+    DrawCardAction,
+    DrawFromDiscardAction,
+    DrawToDiscardAction,
     MoveCardToPlayerAction,
     PlayCardsAction,
     RecallCardsAction,
-    ShuffleDeckAction,
+    ShuffleDeckAction
 )
 logger = logging.getLogger(__name__)
 
@@ -249,11 +252,6 @@ class GameEventHandler:
             room.game_state = CardGameSpecificState(**game_state_dict)
             room.game_state.status = 'active'
 
-            # Set initial turn
-            if room.game_state.turn_order:
-                room.game_state.current_turn_guest_id = room.game_state.turn_order[0]
-                room.game_state.current_player_index = 0
-            
             updated_room = await crud_room.update_room(room_id, room)
             
             room_response = RoomResponse.from_orm(updated_room).model_dump(by_alias=True)
@@ -294,10 +292,13 @@ class GameEventHandler:
             action_classes = {
                 'PLAY_CARDS': PlayCardsAction,
                 'DISCARD_CARDS': DiscardCardsAction,
+                'DRAW_FROM_DISCARD': DrawFromDiscardAction,
+                'DRAW_TO_DISCARD': DrawToDiscardAction,
                 'RECALL_CARDS': RecallCardsAction,
                 'MOVE_CARD_TO_PLAYER': MoveCardToPlayerAction,
                 'SHUFFLE_DECK': ShuffleDeckAction,
                 'DEAL_CARDS': DealCardsAction,
+                'DRAW_CARD': DrawCardAction,
             }
             
             action_class = action_classes.get(action_type)
@@ -315,14 +316,6 @@ class GameEventHandler:
             action.validate_action(player_index, room.game_state, room)
             action.apply(room.game_state, player_index, room)
 
-            # --- Advance Turn ---
-            if room.game_state.turn_order:
-                current_index = room.game_state.current_player_index or 0
-                next_index = (current_index + 1) % len(room.game_state.turn_order)
-                room.game_state.current_player_index = next_index
-                room.game_state.current_turn_guest_id = room.game_state.turn_order[next_index]
-                room.game_state.turn_number += 1
-            
             # Update last activity time before saving
             room.last_activity = datetime.now(timezone.utc)
             updated_room = await crud_room.update_room(room_id, room)
