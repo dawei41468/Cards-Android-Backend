@@ -265,6 +265,55 @@ async def start_game(
             detail="An unexpected error occurred while starting the game"
         )
 
+@router.post("/{room_id}/restart", response_model=RoomResponse)
+async def restart_game(
+    room_id: str,
+    current_guest: TokenData = Depends(get_current_guest_from_token)
+):
+    """
+    Restarts the game in the specified room, resetting its state.
+    Requires host authentication.
+    """
+    if not current_guest.sub:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Could not validate credentials",
+        )
+
+    try:
+        room = await crud_room.get_room_by_id(room_id=room_id)
+        if not room:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
+
+        if room.host_id != current_guest.sub:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the host can restart the game"
+            )
+
+        updated_room = await crud_room.restart_game(room_id=room_id)
+
+        if not updated_room:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to restart game"
+            )
+
+        response = RoomResponse.from_orm(updated_room)
+        await websocket_manager.emit('gameStateUpdate', response.model_dump(mode='json'), room=room_id)
+        logger.info(f"Emitted global 'gameStateUpdate' to room {room_id} after game restart.")
+        
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in restart_game endpoint: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while restarting the game"
+        )
+
 @router.post("/{room_id}/leave", status_code=status.HTTP_204_NO_CONTENT)
 async def leave_room(
     room_id: str,

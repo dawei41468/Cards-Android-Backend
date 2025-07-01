@@ -469,6 +469,64 @@ async def start_game(room_id: str) -> Optional[Room]:
         logger.error(f"Error starting game for room {room_id}: {e}")
         return None
 
+async def restart_game(room_id: str) -> Optional[Room]:
+    """
+    Resets the game state for the specified room and immediately starts a new game.
+    This includes clearing player hands, deck, discard pile, and table piles,
+    shuffling a new deck, dealing cards, and setting game status to 'active'.
+    """
+    try:
+        collection = await get_room_collection()
+        room = await get_room_by_id(room_id)
+        if not room:
+            logger.warning(f"Room {room_id} not found for restart_game.")
+            return None
+
+        # Reset player hands and set ready status to True for all players
+        # as a restart implies they are ready for the next round.
+        for player in room.players:
+            player.hand = []
+            player.is_ready = True # Automatically ready for restart
+
+        # Create and shuffle a new deck
+        deck = _create_deck(room.settings)
+        
+        # Deal cards to players
+        player_hands = {p.guest_id: [deck.pop() for _ in range(room.settings.initial_deal_count)] for p in room.players}
+        for player in room.players:
+            player.hand = player_hands.get(player.guest_id, [])
+
+        # Reset game state to active
+        room.game_state = CardGameSpecificState(
+            status="active",
+            deck=deck,
+            current_turn_guest_id=room.players[0].guest_id, # First player in the list starts
+            turn_order=[p.guest_id for p in room.players],
+            current_player_index=0,
+            discard_pile=[],
+            table=[],
+            turn_number=0,
+            last_action_description=None
+        )
+        room.status = "active" # Set room status to active after restart
+
+        # Update the room in the database
+        result = await collection.update_one(
+            {"_id": room_id},
+            {"$set": room.model_dump(by_alias=True)}
+        )
+
+        if result.modified_count == 1:
+            logger.info(f"Game state for room {room_id} reset and restarted successfully.")
+            return await get_room_by_id(room_id)
+        else:
+            logger.warning(f"Failed to restart game for room {room_id}. Matched: {result.matched_count}, Modified: {result.modified_count}")
+            return None
+
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while restarting game for room {room_id}: {e}", exc_info=True)
+        return None
+
 async def delete_room(room_id: str) -> bool:
     """
     Deletes a room from the database by its room_id.
