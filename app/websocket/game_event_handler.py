@@ -306,8 +306,8 @@ class GameEventHandler:
                 raise ValueError(f"Unknown action type: {action_type}")
 
             if action_type == 'DEAL_CARDS':
-                deal_count = room.settings.initial_deal_count
-                action = DealCardsAction(count=deal_count)
+                deal_count = action_data.get('count', room.settings.initial_deal_count)
+                action = DealCardsAction(count=int(deal_count))
             else:
                 action = action_class(**action_data)
             
