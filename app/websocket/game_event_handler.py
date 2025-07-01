@@ -305,7 +305,11 @@ class GameEventHandler:
             if not action_class:
                 raise ValueError(f"Unknown action type: {action_type}")
 
-            action = action_class(**action_data)
+            if action_type == 'DEAL_CARDS':
+                deal_count = room.settings.initial_deal_count
+                action = DealCardsAction(count=deal_count)
+            else:
+                action = action_class(**action_data)
             
             player_index = -1
             for i, p in enumerate(room.players):

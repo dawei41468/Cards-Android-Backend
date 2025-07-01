@@ -21,6 +21,7 @@ class RoomSettings(BaseModel):
     number_of_decks: int = Field(default=1, ge=1, le=4, description="Number of decks to use (1-4)")
     include_jokers: bool = Field(default=False, description="Whether to include jokers in the deck")
     max_players: int = Field(default=2, ge=2, le=8, description="Maximum number of players in the room")
+    initial_deal_count: int = Field(default=0, ge=0, le=17, description="Number of cards to deal to each player at game start")
 
 # --- Game Specific Models ---
 

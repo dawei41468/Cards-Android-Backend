@@ -11,7 +11,6 @@ import random
 logger = logging.getLogger(__name__)
 
 ROOM_COLLECTION = "rooms" # Name of the MongoDB collection for rooms
-INITIAL_HAND_SIZE = 7 # Number of cards to deal to each player
 
 async def get_room_collection() -> AsyncIOMotorCollection:
     """Helper to get the rooms collection."""
@@ -446,7 +445,7 @@ async def start_game(room_id: str) -> Optional[Room]:
 
         deck = _create_deck(room.settings)
         
-        player_hands = {p.guest_id: [deck.pop() for _ in range(INITIAL_HAND_SIZE)] for p in room.players}
+        player_hands = {p.guest_id: [deck.pop() for _ in range(room.settings.initial_deal_count)] for p in room.players}
 
         for player in room.players:
             player.hand = player_hands.get(player.guest_id, [])
@@ -454,8 +453,6 @@ async def start_game(room_id: str) -> Optional[Room]:
         room.game_state = CardGameSpecificState(
             status="active",
             deck=deck,
-            players=room.players,
-            player_hands=player_hands,
             current_turn_guest_id=room.players[0].guest_id,
             turn_order=[p.guest_id for p in room.players],
             current_player_index=0
