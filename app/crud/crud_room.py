@@ -430,7 +430,11 @@ def _create_deck(settings) -> List[Card]:
     ranks = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
     deck = [Card(id=f"{suit}{rank}-{i}", suit=suit, rank=rank, deckId=i) for i in range(settings.number_of_decks) for suit in suits for rank in ranks]
     if settings.include_jokers:
-        deck.extend([Card(id=f"Joker-{i}", suit="Joker", rank="Joker", deckId=i) for i in range(2 * settings.number_of_decks)])
+        for i in range(settings.number_of_decks):
+            # Red Joker
+            deck.append(Card(id=f"Joker-Red-{i}", suit="Red", rank="Joker", deckId=i))
+            # Black Joker
+            deck.append(Card(id=f"Joker-Black-{i}", suit="Black", rank="Joker", deckId=i))
     random.shuffle(deck)
     return deck
 

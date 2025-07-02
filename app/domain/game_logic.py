@@ -66,8 +66,8 @@ def create_deck(num_decks: int = 1, include_jokers: bool = False) -> List[Card]:
                 card_id = f"{suit}{rank}-{deck_id}"
                 deck.append(Card(id=card_id, suit=suit, rank=rank, deckId=deck_id))
         if include_jokers:
-            deck.append(Card(id=f"Joker1-{deck_id}", suit="Joker", rank="Joker1", deckId=deck_id))
-            deck.append(Card(id=f"Joker2-{deck_id}", suit="Joker", rank="Joker2", deckId=deck_id))
+            deck.append(Card(id=f"Joker-Red-{deck_id}", suit="Red", rank="Joker", deckId=deck_id))
+            deck.append(Card(id=f"Joker-Black-{deck_id}", suit="Black", rank="Joker", deckId=deck_id))
     return deck
 
 def shuffle_deck(room: Room):
