@@ -100,3 +100,21 @@ class DrawFromDiscardAction(PlayerAction):
 
     def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
         game_logic.draw_from_discard(room, player_index)
+
+
+class UpdateHandOrderAction(PlayerAction):
+    cards: List[Card]
+
+    def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
+        # Basic validation: ensure the player exists
+        if not room.players or player_index < 0 or player_index >= len(room.players):
+            raise ValueError("Player not found in room.")
+        # Further validation could be added if needed, e.g., checking card IDs.
+        # For now, we trust the client sends valid cards it possesses.
+
+    def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
+        # Update the player's hand with the new ordered list of cards
+        player = room.players[player_index]
+        player.hand = self.cards
+        # Note: The game_state is part of the room object, so modifying room.players
+        # directly updates the hand within the room's state.

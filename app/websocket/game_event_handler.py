@@ -22,7 +22,8 @@ from app.websocket.actions.player_actions import (
     MoveCardsToPlayerAction,
     PlayCardsAction,
     RecallCardsAction,
-    ShuffleDeckAction
+    ShuffleDeckAction,
+    UpdateHandOrderAction
 )
 logger = logging.getLogger(__name__)
 
@@ -299,15 +300,19 @@ class GameEventHandler:
                 'SHUFFLE_DECK': ShuffleDeckAction,
                 'DEAL_CARDS': DealCardsAction,
                 'DRAW_CARD': DrawCardAction,
+                'UPDATE_HAND_ORDER': UpdateHandOrderAction,
             }
             
             action_class = action_classes.get(action_type)
             if not action_class:
                 raise ValueError(f"Unknown action type: {action_type}")
 
+            # Instantiate the action based on its type
             if action_type == 'DEAL_CARDS':
                 deal_count = action_data.get('count', room.settings.initial_deal_count)
                 action = DealCardsAction(count=int(deal_count))
+            elif action_type == 'UPDATE_HAND_ORDER':
+                action = UpdateHandOrderAction(cards=action_data.get('cards', []))
             else:
                 action = action_class(**action_data)
             
