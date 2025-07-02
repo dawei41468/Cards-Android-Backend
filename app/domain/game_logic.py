@@ -42,16 +42,18 @@ def recall_cards(room: Room, player_index: int):
             player.hand.append(card)
     room.game_state.table.clear()
 
-def move_card_to_player(room: Room, source_player_index: int, card: Card, target_player_id: str):
+def move_cards_to_player(room: Room, source_player_index: int, cards: List[Card], target_player_id: str):
     """
-    Move a card from one player's hand to another's.
+    Move cards from one player's hand to another's.
     """
     source_player = room.players[source_player_index]
     target_player = next((p for p in room.players if p.guest_id == target_player_id), None)
 
-    if target_player and card in source_player.hand:
-        source_player.hand.remove(card)
-        target_player.hand.append(card)
+    if target_player:
+        for card in cards:
+            if card in source_player.hand:
+                source_player.hand.remove(card)
+                target_player.hand.append(card)
 
 def create_deck(num_decks: int = 1, include_jokers: bool = False) -> List[Card]:
     """

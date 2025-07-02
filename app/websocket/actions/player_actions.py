@@ -42,21 +42,25 @@ class RecallCardsAction(PlayerAction):
         game_logic.recall_cards(room, player_index)
 
 
-class MoveCardToPlayerAction(PlayerAction):
-    card: Card
+class MoveCardsToPlayerAction(PlayerAction):
+    cards: List[Card]
     target_player_id: str
+
+    class Config:
+        populate_by_name = True
+        alias_generator = lambda field_name: "".join([word.capitalize() if i > 0 else word for i, word in enumerate(field_name.split("_"))])
 
     def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
         player = room.players[player_index]
-        if self.card not in player.hand:
-            raise ValueError("Player does not have this card to move")
+        if not all(card in player.hand for card in self.cards):
+            raise ValueError("Player does not have all of these cards to move")
         
         target_player_exists = any(p.guest_id == self.target_player_id for p in room.players)
         if not target_player_exists:
             raise ValueError("Target player not found in the room")
 
     def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
-        game_logic.move_card_to_player(room, player_index, self.card, self.target_player_id)
+        game_logic.move_cards_to_player(room, player_index, self.cards, self.target_player_id)
 
 
 class ShuffleDeckAction(HostAction):

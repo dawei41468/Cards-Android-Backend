@@ -19,7 +19,7 @@ from app.websocket.actions.player_actions import (
     DrawCardAction,
     DrawFromDiscardAction,
     DrawToDiscardAction,
-    MoveCardToPlayerAction,
+    MoveCardsToPlayerAction,
     PlayCardsAction,
     RecallCardsAction,
     ShuffleDeckAction
@@ -295,7 +295,7 @@ class GameEventHandler:
                 'DRAW_FROM_DISCARD': DrawFromDiscardAction,
                 'DRAW_TO_DISCARD': DrawToDiscardAction,
                 'RECALL_CARDS': RecallCardsAction,
-                'MOVE_CARD_TO_PLAYER': MoveCardToPlayerAction,
+                'MOVE_CARDS_TO_PLAYER': MoveCardsToPlayerAction,
                 'SHUFFLE_DECK': ShuffleDeckAction,
                 'DEAL_CARDS': DealCardsAction,
                 'DRAW_CARD': DrawCardAction,
