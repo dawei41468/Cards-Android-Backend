@@ -7,42 +7,70 @@ if TYPE_CHECKING:
     from app.models.room import Room
 
 
-class PlayCardsAction(PlayerAction):
+class BasePlayerAction(PlayerAction):
+    def validate_game_started(self, game_state: CardGameSpecificState):
+        if not game_state:
+            raise ValueError("Game not started")
+
+    def validate_player_exists(self, player_index: int, room: 'Room'):
+        if not room.players or player_index < 0 or player_index >= len(room.players):
+            raise ValueError("Player not found in room")
+        return room.players[player_index]
+
+    def validate_card_ownership(self, player, cards: List[Card]):
+        if not all(card in player.hand for card in cards):
+            raise ValueError("Player does not have all of these cards")
+
+    def validate_cards_on_table(self, game_state: CardGameSpecificState):
+        if not game_state.table:
+            raise ValueError("No cards on the table to recall")
+
+    def validate_deck_not_empty(self, game_state: CardGameSpecificState):
+        if not game_state.deck:
+            raise ValueError("No cards in deck to draw")
+
+    def validate_discard_pile_not_empty(self, game_state: CardGameSpecificState):
+        if not game_state.discard_pile:
+            raise ValueError("No cards in discard pile to draw")
+
+    def validate_target_player(self, target_player_id: str, room: 'Room'):
+        if not any(p.guest_id == target_player_id for p in room.players):
+            raise ValueError("Target player not found in the room")
+
+
+class PlayCardsAction(BasePlayerAction):
     cards: List[Card]
 
     def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
-        if not game_state:
-            raise ValueError("Game not started")
-        player = room.players[player_index]
-        if not all(card in player.hand for card in self.cards):
-            raise ValueError("Player does not have all of these cards")
+        self.validate_game_started(game_state)
+        player = self.validate_player_exists(player_index, room)
+        self.validate_card_ownership(player, self.cards)
 
     def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
         game_logic.play_cards(room, player_index, self.cards)
 
 
-class DiscardCardsAction(PlayerAction):
+class DiscardCardsAction(BasePlayerAction):
     cards: list[Card]
 
     def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
-        player = room.players[player_index]
-        if not all(card in player.hand for card in self.cards):
-            raise ValueError("Player does not have all of these cards")
+        player = self.validate_player_exists(player_index, room)
+        self.validate_card_ownership(player, self.cards)
 
     def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
         game_logic.discard_cards(room, player_index, self.cards)
 
 
-class RecallCardsAction(PlayerAction):
+class RecallCardsAction(BasePlayerAction):
     def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
-        if not game_state or not game_state.table:
-            raise ValueError("No cards on the table to recall")
+        self.validate_game_started(game_state)
+        self.validate_cards_on_table(game_state)
 
     def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
         game_logic.recall_cards(room, player_index)
 
 
-class MoveCardsToPlayerAction(PlayerAction):
+class MoveCardsToPlayerAction(BasePlayerAction):
     cards: List[Card]
     target_player_id: str
 
@@ -51,13 +79,9 @@ class MoveCardsToPlayerAction(PlayerAction):
         alias_generator = lambda field_name: "".join([word.capitalize() if i > 0 else word for i, word in enumerate(field_name.split("_"))])
 
     def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
-        player = room.players[player_index]
-        if not all(card in player.hand for card in self.cards):
-            raise ValueError("Player does not have all of these cards to move")
-        
-        target_player_exists = any(p.guest_id == self.target_player_id for p in room.players)
-        if not target_player_exists:
-            raise ValueError("Target player not found in the room")
+        player = self.validate_player_exists(player_index, room)
+        self.validate_card_ownership(player, self.cards)
+        self.validate_target_player(self.target_player_id, room)
 
     def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
         game_logic.move_cards_to_player(room, player_index, self.cards, self.target_player_id)
@@ -74,47 +98,39 @@ class DealCardsAction(HostAction):
     def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
         game_logic.deal_cards(room, self.count)
 
-class DrawCardAction(PlayerAction):
+class DrawCardAction(BasePlayerAction):
     def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
-        if not game_state:
-            raise ValueError("Game not started")
-        player = room.players[player_index]
+        self.validate_game_started(game_state)
+        self.validate_player_exists(player_index, room)
 
     def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
         game_logic.draw_card(room, player_index)
 
 
-class DrawToDiscardAction(PlayerAction):
+class DrawToDiscardAction(BasePlayerAction):
     def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
-        if not game_state or not game_state.deck:
-            raise ValueError("No cards in deck to draw")
+        self.validate_game_started(game_state)
+        self.validate_deck_not_empty(game_state)
 
     def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
         game_logic.draw_to_discard(room)
 
 
-class DrawFromDiscardAction(PlayerAction):
+class DrawFromDiscardAction(BasePlayerAction):
     def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
-        if not game_state or not game_state.discard_pile:
-            raise ValueError("No cards in discard pile to draw")
+        self.validate_game_started(game_state)
+        self.validate_discard_pile_not_empty(game_state)
 
     def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
         game_logic.draw_from_discard(room, player_index)
 
 
-class UpdateHandOrderAction(PlayerAction):
+class UpdateHandOrderAction(BasePlayerAction):
     cards: List[Card]
 
     def validate_action(self, player_index: int, game_state: CardGameSpecificState, room: 'Room'):
-        # Basic validation: ensure the player exists
-        if not room.players or player_index < 0 or player_index >= len(room.players):
-            raise ValueError("Player not found in room.")
-        # Further validation could be added if needed, e.g., checking card IDs.
-        # For now, we trust the client sends valid cards it possesses.
+        self.validate_player_exists(player_index, room)
 
     def apply(self, game_state: CardGameSpecificState, player_index: int, room: 'Room'):
-        # Update the player's hand with the new ordered list of cards
         player = room.players[player_index]
         player.hand = self.cards
-        # Note: The game_state is part of the room object, so modifying room.players
-        # directly updates the hand within the room's state.

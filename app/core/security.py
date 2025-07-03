@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-import logging
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -34,7 +33,6 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     # If an explicit expires_delta is not provided, default to 1 day.
     # Revert to a standard 1-day expiration now that the client can handle 401s.
     effective_expires_delta = expires_delta or timedelta(days=1)
-    logging.info(f"V3: Creating token with lifetime: {effective_expires_delta}") # V3 Logging
     
     # Calculate expiration time based on the current server time.
     expire = datetime.now(timezone.utc) + effective_expires_delta
@@ -75,8 +73,8 @@ async def decode_access_token(token: str) -> TokenData:
             payload_unverified = json.loads(base64.urlsafe_b64decode(token.split('.')[1] + '==').decode())
             exp_time = datetime.fromtimestamp(payload_unverified.get('exp', 0), tz=timezone.utc)
             iat_time = datetime.fromtimestamp(payload_unverified.get('iat', 0), tz=timezone.utc)
-        except Exception as e:
-            logging.error(f"Could not manually decode payload for logging: {e}")
+        except Exception:
+            pass
         # --- End Enhanced Logging ---
 
         payload = jwt.decode(
@@ -88,13 +86,11 @@ async def decode_access_token(token: str) -> TokenData:
         guest_id: Optional[str] = payload.get("sub")
         nickname: Optional[str] = payload.get("nickname")
 
-        logging.info(f"Extracted guest_id: {guest_id}")
         if guest_id is None:
             raise CREDENTIALS_EXCEPTION
 
         return TokenData(sub=guest_id, nickname=nickname)
     except JWTError as e:
-        logging.error(f"JWT decoding error: {e}")
         raise CREDENTIALS_EXCEPTION
 
 

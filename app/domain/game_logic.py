@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict
 """
 Core game logic for the card game.
 """
@@ -8,7 +8,12 @@ import uuid
 
 def play_cards(room: Room, player_index: int, cards: list[Card]):
     """
-    Move cards from a player's hand to the table.
+    Moves specified cards from a player's hand to the game table.
+    
+    Args:
+        room (Room): The current game room object.
+        player_index (int): The index of the player performing the action.
+        cards (list[Card]): The list of cards to play.
     """
     if not room.game_state:
         return
@@ -17,10 +22,17 @@ def play_cards(room: Room, player_index: int, cards: list[Card]):
         if card in player.hand:
             player.hand.remove(card)
     room.game_state.table.append(cards)
+    room.game_state.last_player_id = player.guest_id
+    room.game_state.last_played_or_discarded_cards[player.guest_id] = cards
 
 def discard_cards(room: Room, player_index: int, cards: list[Card]):
     """
-    Move cards from a player's hand to the discard pile.
+    Moves specified cards from a player's hand to the discard pile.
+    
+    Args:
+        room (Room): The current game room object.
+        player_index (int): The index of the player performing the action.
+        cards (list[Card]): The list of cards to discard.
     """
     if not room.game_state:
         return
@@ -29,22 +41,47 @@ def discard_cards(room: Room, player_index: int, cards: list[Card]):
         if card in player.hand:
             player.hand.remove(card)
             room.game_state.discard_pile.append(card)
+    room.game_state.last_player_id = player.guest_id
+    room.game_state.last_played_or_discarded_cards[player.guest_id] = cards
 
 def recall_cards(room: Room, player_index: int):
     """
-    Recall all cards from the table to a player's hand.
+    Recalls the last played or discarded cards by a specific player from the table to their hand.
+    
+    Args:
+        room (Room): The current game room object.
+        player_index (int): The index of the player recalling cards.
     """
     if not room.game_state:
         return
+
     player = room.players[player_index]
-    for pile in room.game_state.table:
-        for card in pile:
-            player.hand.append(card)
-    room.game_state.table.clear()
+    player_id = player.guest_id
+
+    if room.game_state.last_player_id != player_id:
+        return
+
+    cards_to_recall = room.game_state.last_played_or_discarded_cards.get(player_id)
+
+    if cards_to_recall:
+        try:
+            room.game_state.table.remove(cards_to_recall)
+        except ValueError:
+            pass
+
+        player.hand.extend(cards_to_recall)
+        room.game_state.last_played_or_discarded_cards.pop(player_id, None)
+        room.game_state.last_player_id = None
 
 def move_cards_to_player(room: Room, source_player_index: int, cards: List[Card], target_player_id: str):
     """
-    Move cards from one player's hand to another's.
+    Moves specified cards from one player's hand to another player's hand.
+    
+    Args:
+        room (Room): The current game room object.
+        source_player_index (int): The index of the player giving cards.
+        cards (List[Card]): The list of cards to move.
+        target_player_id (str): The ID of the player receiving cards.
     """
     source_player = room.players[source_player_index]
     target_player = next((p for p in room.players if p.guest_id == target_player_id), None)
@@ -57,7 +94,14 @@ def move_cards_to_player(room: Room, source_player_index: int, cards: List[Card]
 
 def create_deck(num_decks: int = 1, include_jokers: bool = False) -> List[Card]:
     """
-    Creates a standard deck of cards.
+    Creates a standard deck of cards based on the specified number of decks and joker inclusion.
+    
+    Args:
+        num_decks (int): The number of standard 52-card decks to include.
+        include_jokers (bool): Whether to include two jokers per deck.
+        
+    Returns:
+        List[Card]: A list of Card objects representing the newly created deck.
     """
     suits = ['H', 'D', 'C', 'S']
     ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
@@ -74,7 +118,10 @@ def create_deck(num_decks: int = 1, include_jokers: bool = False) -> List[Card]:
 
 def shuffle_deck(room: Room):
     """
-    Shuffle the deck, incorporating cards from the table.
+    Shuffles the game deck, incorporating any cards currently on the table back into the deck.
+    
+    Args:
+        room (Room): The current game room object.
     """
     if not room.game_state:
         return
@@ -88,7 +135,11 @@ def shuffle_deck(room: Room):
 
 def deal_cards(room: Room, count: int):
     """
-    Deal a specified number of cards to each player.
+    Deals a specified number of cards from the deck to each player in the room.
+    
+    Args:
+        room (Room): The current game room object.
+        count (int): The number of cards to deal to each player.
     """
     if not room.game_state:
         return
@@ -101,18 +152,26 @@ def deal_cards(room: Room, count: int):
 
 def initialize_game_state(room_id: str, settings: dict, players: list[dict]) -> dict:
     """
-    Initialize a new game state.
+    Initializes a new game state for a room, including creating and shuffling a deck.
+    
+    Args:
+        room_id (str): The ID of the room.
+        settings (dict): Dictionary of game settings.
+        players (list[dict]): List of player dictionaries.
+        
+    Returns:
+        dict: The initialized game state dictionary.
     """
     num_decks = settings.get("number_of_decks", 1)
     include_jokers = settings.get("include_jokers", False)
     initial_deck = create_deck(num_decks, include_jokers)
-    random.shuffle(initial_deck) # Shuffle the newly created deck
+    random.shuffle(initial_deck)
 
     return {
         "room_id": room_id,
         "status": "active",
         "players": players,
-        "deck": [card.model_dump() for card in initial_deck], # Convert Card objects to dicts
+        "deck": [card.model_dump() for card in initial_deck],
         "table": [],
         "discard_pile": [],
         "current_turn": 0,
@@ -120,7 +179,11 @@ def initialize_game_state(room_id: str, settings: dict, players: list[dict]) -> 
 
 def draw_card(room: Room, player_index: int):
     """
-    Draw one card from the deck to a player's hand.
+    Draws a single card from the deck and adds it to a player's hand.
+    
+    Args:
+        room (Room): The current game room object.
+        player_index (int): The index of the player drawing the card.
     """
     if not room.game_state or not room.game_state.deck:
         return
@@ -130,7 +193,10 @@ def draw_card(room: Room, player_index: int):
 
 def draw_to_discard(room: Room):
     """
-    Draw one card from the deck to the discard pile.
+    Draws a single card from the deck and places it directly into the discard pile.
+    
+    Args:
+        room (Room): The current game room object.
     """
     if not room.game_state or not room.game_state.deck:
         return
@@ -139,7 +205,11 @@ def draw_to_discard(room: Room):
 
 def draw_from_discard(room: Room, player_index: int):
     """
-    Draw one card from the discard pile to a player's hand.
+    Draws the top card from the discard pile and adds it to a player's hand.
+    
+    Args:
+        room (Room): The current game room object.
+        player_index (int): The index of the player drawing the card.
     """
     if not room.game_state or not room.game_state.discard_pile:
         return

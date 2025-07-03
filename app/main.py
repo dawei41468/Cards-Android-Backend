@@ -1,7 +1,6 @@
 """
 Main FastAPI application entry point.
 """
-import logging
 from contextlib import asynccontextmanager
 import socketio
 import asyncio
@@ -15,10 +14,8 @@ from app.websocket.game_event_handler import GameEventHandler
 from app.websocket.manager import websocket_manager
 from app.core.json_encoder import CustomJSONEncoder
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
+# Custom JSON module for `python-socketio` to use `CustomJSONEncoder`.
+# This ensures that custom Python objects (like Pydantic models) are correctly serialized to JSON.
 class CustomJsonModule:
     def dumps(self, *args, **kwargs):
         kwargs['cls'] = CustomJSONEncoder
@@ -27,6 +24,7 @@ class CustomJsonModule:
     def loads(self, *args, **kwargs):
         return json.loads(*args, **kwargs)
 
+# Instance of the custom JSON module used by the Socket.IO server.
 custom_json = CustomJsonModule()
 
 # --- Background Task ---
@@ -40,7 +38,6 @@ async def run_cleanup_task():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown events."""
-    logger.info("Application startup: Connecting to MongoDB...")
     await connect_to_mongo()
     
     # Set up the WebSocket manager with the SIO server instance
@@ -65,7 +62,6 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        logger.info("Application shutdown: Closing MongoDB connection...")
         cleanup_task.cancel()
         await close_mongo_connection()
 
@@ -77,8 +73,6 @@ sio = socketio.AsyncServer(
     engineio_logger=True,
     json=custom_json
 )
-
-# Set up Socket.IO event handlers
 
 # --- FastAPI Application Setup ---
 app = FastAPI(
